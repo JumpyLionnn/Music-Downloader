@@ -2,6 +2,8 @@ import sys
 import re
 import json
 import os
+import time
+from pathlib import Path
 
 import dotenv
 import requests
@@ -10,13 +12,64 @@ import yt_dlp
 from ytmusicapi import YTMusic
 from PIL import Image
 import music_tag
+from lrclib import LrclibClient
 
 dotenv.load_dotenv()
 
 directory = os.getenv("OUTPUT_DIR", "./Music")
 port = os.getenv("PORT", 5000)
+lyrics_duration_diff = os.getenv("MAX_LYRICS_DURATION_DIFF", 15)
 
 ytmusic = YTMusic()
+
+class LyricsDownloaderPostProcessor(yt_dlp.postprocessor.PostProcessor):
+    client = LrclibClient("Mozilla/5.0 (X11; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0")
+
+    def run(self, info):
+        album = info["album"]
+        artists = info["artists"]
+        title = info["title"]
+        # for download in info["requested_downloads"]:
+        #     print(download["filename"])
+        path = Path(info["requested_downloads"][0]["filename"])
+        duration = int(info["duration"])
+        time.sleep(1)
+        results = []
+        try:
+            results = self.client.search(title, artists[0])
+        except:
+            self.to_screen("Encountered an error while fetching lyrics, trying again...")
+            time.sleep(8)
+            try:
+                results = self.client.search(title, artists[0])
+            except:
+                self.to_screen("Encountered an error again while fetching lyrics, skipping...") 
+                return [], info
+
+        
+        best_res = None
+        for result in results:
+            if not result.instrumental:
+                # print(f"id: {result.song_id} status: {result.status}, duration: {result.duration}")
+                if result.status == "Synced" and result.duration is not None:
+                    duration_diff = abs(result.duration - duration)
+                    if duration_diff <= lyrics_duration_diff:
+                        if best_res is None or duration_diff < best_res["duration_diff"]:
+                            best_res = {
+                                "id": result.song_id,
+                                "lyrics": result.synced_lyrics,
+                                "duration_diff": duration_diff,
+                            }
+
+        # print(best_res["lyrics"])
+        # lrc_dir = path.dirname(path)
+        with open(f"{path.parent}/{path.stem}.lrc", "w") as lrc_file:
+            lrc_file.write(best_res["lyrics"])
+            self.to_screen(f"Written lrc file with duration difference of {best_res["duration_diff"]}secs");
+        # print(list(info.keys()))
+        return [], info
+
+
 def get_albums(artist):
     if "browseId" in artist["albums"] and "params" in artist["albums"]:
         return ytmusic.get_artist_albums(artist["albums"]["browseId"], artist["albums"]["params"])
@@ -133,13 +186,13 @@ def download_artist(artist, directory = "./"):
     ydl_opts = get_yt_dlp_opts(f'{directory}/{artist["name"]}/Singles/%(album,playlist)s/%(track,title)s.%(ext)s')
     ydl_opts["match_filter"] = get_singles_filter(exclude)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.add_post_processor(LyricsDownloaderPostProcessor(), when="after_video")
         info = ydl.download(singles_urls)
-        # print(info)
 
     ydl_opts = get_yt_dlp_opts(f'{directory}/{artist["name"]}/%(album,playlist)s/%(track,title)s.%(ext)s')
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.add_post_processor(LyricsDownloaderPostProcessor(), when="after_video")
         info = ydl.download(urls)
-        # print(info)
 
     # artist_thumbnail = get_thumbnail_url(artist["thumbnails"])
     # download_image_url(artist_thumbnail, f"{directory}/{artist["name"]}/folder.png")
@@ -175,13 +228,11 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 @app.route('/')
 def home():
-    print("home")
     results = []
     if "q" in request.args:
         query = request.args["q"]
         if query.strip() != "":
             results = ytmusic.search(query, None, None, 30)
-    print("rendering template")
     return render_template("template.html", results=results), 200
 
 @app.route("/download", methods=["POST"])
@@ -196,6 +247,7 @@ def download():
         path = f"{directory}/{song_path}/{song["videoDetails"]["title"]}"
         ydl_opts = get_yt_dlp_opts(f'{path}.%(ext)s')
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.add_post_processor(LyricsDownloaderPostProcessor(), when="after_video")
             info = ydl.download([f"https://music.youtube.com/watch?v={video_id}"])
             file = music_tag.load_file(f"{path}.m4a")
             if f"{file["album"]}" == "":
@@ -203,12 +255,12 @@ def download():
                 file.save()
     elif chosen["resultType"] == "album":
         album = ytmusic.get_album(chosen["browseId"])
-        print("album type:", album["type"])
         artist = album["artists"][0]["name"]
         path = f"{directory}/{artist}/%(album,playlist)s/%(track,title)s.%(ext)s"
         # ydl_opts = get_yt_dlp_opts(f'{directory}/{artist["name"]}/%(album,playlist)s/%(track,title)s.%(ext)s')
         ydl_opts = get_yt_dlp_opts(path)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.add_post_processor(LyricsDownloaderPostProcessor(), when="after_video")
             url = f"https://music.youtube.com/playlist?list={album["audioPlaylistId"]}"
             info = ydl.download([url])
         thumbnail = get_thumbnail_url(album["thumbnails"])

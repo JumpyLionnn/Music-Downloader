@@ -8,6 +8,7 @@ the output directory structure fits jellyfin's music library structure (artist/a
 
 It's a quick and dirty web ui and the server is not secure at all, use at your own risk
 It is made using yt-dlp and youtube music web page api to browse and download tracks
+The server will also attempt to download lyrics from lrc lib, although as I have observed, it's not that reliable
 
 100% Human made
 
@@ -25,6 +26,7 @@ Here is an example of a config .env file
 ```env
 PORT=5000
 OUTPUT_DIR=./Music/
+MAX_LYRICS_DURATION_DIFF=15
 ```
 
 

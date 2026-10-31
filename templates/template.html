@@ -21,7 +21,6 @@
 
             function download(result, event) {
                 const parent = event.srcElement.parentNode;
-                console.log(event.srcElement.nextElementSibling);
                 const loader = event.srcElement.nextElementSibling;
                 loader.classList.add("loader");
                 fetch("/download", {
