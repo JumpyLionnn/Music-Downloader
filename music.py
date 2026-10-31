@@ -175,11 +175,14 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 @app.route('/')
 def home():
-    query = request.args["q"]
+    print("home")
     results = []
-    if query is not None and query.strip() != "":
-        results = ytmusic.search(query, None, None, 30)
-    return render_template("template.html", results=results)
+    if "q" in request.args:
+        query = request.args["q"]
+        if query.strip() != "":
+            results = ytmusic.search(query, None, None, 30)
+    print("rendering template")
+    return render_template("template.html", results=results), 200
 
 @app.route("/download", methods=["POST"])
 def download():
