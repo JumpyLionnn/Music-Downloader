@@ -1,0 +1,106 @@
+<html>
+    <head>
+        <title>Music Library Manager</title>
+        <script>
+            window.None = undefined;
+            window.False = false;
+            window.True = true;
+            function on_search() {
+                if ('URLSearchParams' in window) {
+                    let searchParams = new URLSearchParams(window.location.search);
+                    let query = document.getElementById("query").value;
+                    searchParams.set("q", query);
+                    window.location.search = searchParams.toString();
+                }
+            }
+            function input_key_pressed(event) {
+                if (event.key == "Enter") {
+                    on_search();
+                }
+            }
+
+            function download(result, event) {
+                const parent = event.srcElement.parentNode;
+                console.log(event.srcElement.nextElementSibling);
+                const loader = event.srcElement.nextElementSibling;
+                loader.classList.add("loader");
+                fetch("/download", {
+                    method: "POST",
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(result),
+                })
+                    .then(() => {
+                        loader.classList.remove("loader");
+                    })
+                    .catch((err) => {
+                        loader.classList.remove("loader");
+                        alert(err.toString());
+                    });
+            }
+
+        </script>
+        <style>
+            h4 {
+                color: darkgray;
+            }
+            .loader {
+                border: 4px solid #f3f3f3; /* Light grey */
+                border-top: 4px solid #3498db; /* Blue */
+                border-radius: 50%;
+                width: 28px;
+                height: 28px;
+                animation: spin 2s linear infinite;
+            }
+
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Music Library Manager</h1>
+        <div style="display:flex;">
+            <input type="text" onkeypress="input_key_pressed(event)" id="query" placeholder="Search..." />
+            <button onclick="on_search()">Search</button>
+        </div>
+        <div>
+            {% for result in results %}
+            {% if result["resultType"] == "artist" or result["resultType"] == "album" or result["resultType"] == "song" %}
+            <div style="display:flex;align-items:center;">
+                <img loading="lazy" src="{{result['thumbnails'][-1]['url']}}" width="128" height="128"/>
+                <div>
+                    {% if result["resultType"] == "artist" %}
+                        {% if result["category"] == "Top result" %}
+                            <h3>{{ result["artists"][0]["name"] }}</h3>
+                        {% else %}
+                            <h3>{{ result["artist"] }}</h3>
+                        {% endif %}
+                    {% else %}
+                        <h3>{{ result["title"] }}</h3>
+                    {% endif %}
+                    <h4>{{ result["resultType"] }}</h4>
+                    {% if result["resultType"] == "song" %}
+                    <div>
+                        {% if result["duration"] is not none %}
+                        <span>{{result["duration"]}}</span>
+                        <span> | </span>
+                        {% endif %}
+                        <span>{{result["views"]}} views</span>
+                    </div>
+                    {% endif %}
+                    <div style="display:flex;align-items: center;gap: 3em;">
+                        <button onclick="download({{ result|safe }}, event)">Download</button>
+                        <div></div>
+                    </div>
+                </div>
+            </div>
+            <hr>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </body>
+</html>
