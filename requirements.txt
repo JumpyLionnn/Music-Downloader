@@ -4,3 +4,4 @@ pillow
 yt-dlp
 Flask
 music_tag
+python-dotenv
