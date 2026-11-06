@@ -19,6 +19,7 @@ dotenv.load_dotenv()
 directory = os.getenv("OUTPUT_DIR", "./Music")
 port = os.getenv("PORT", 5000)
 lyrics_duration_diff = os.getenv("MAX_LYRICS_DURATION_DIFF", 15)
+thumbnail_size = os.getenv("THUMBNAIL_SIZE", 320)
 
 ytmusic = YTMusic()
 
@@ -60,6 +61,9 @@ class LyricsDownloaderPostProcessor(yt_dlp.postprocessor.PostProcessor):
                                 "lyrics": result.synced_lyrics,
                                 "duration_diff": duration_diff,
                             }
+        if best_res is None:
+            self.to_screen(f"Coundn't find suitable lyrics for this song.");
+            return [], info
 
         # print(best_res["lyrics"])
         # lrc_dir = path.dirname(path)
@@ -121,10 +125,28 @@ def get_yt_dlp_opts(output_template):
                 'key': 'FFmpegMetadata',
             },
             {
+                'format': 'png',
+                'key': 'FFmpegThumbnailsConvertor',
+                'when': 'before_dl',
+             },
+            {
                 'already_have_thumbnail': False, 
                 'key': 'EmbedThumbnail'
             },
         ],
+        'postprocessor_args': {
+            # crops the thumbnail to a square shape and resizes it to a fixed size
+            'thumbnailsconvertor+ffmpeg_o': [
+                '-c:v',
+                'png',
+                '-qmin',
+                '1',
+                '-qscale:v',
+                '1',
+                '-vf',
+                f'scale={thumbnail_size}:{thumbnail_size}:force_original_aspect_ratio=increase,crop={thumbnail_size}:{thumbnail_size}'
+            ]
+        },
         "sleep_interval": 2,
         "max_sleep_interval": 6,
 

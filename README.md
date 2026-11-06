@@ -26,7 +26,8 @@ Here is an example of a config .env file
 ```env
 PORT=5000
 OUTPUT_DIR=./Music/
-MAX_LYRICS_DURATION_DIFF=15
+MAX_LYRICS_DURATION_DIFF=15 # In seconds
+THUMBNAIL_SIZE=320 # The width and the height of each song thumbnail in pixels, higher means better quality (usually) smaller means smaller file sizes
 ```
 
 
