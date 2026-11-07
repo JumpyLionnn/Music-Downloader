@@ -119,7 +119,7 @@ class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
 
         # track_path = Path(info["requested_downloads"][0]["filename"])
         track_path = Path(info["filepath"])
-        print(track_path)
+        print("track path", track_path)
         path = f"{track_path.parent}/{track_path.stem}.lrc"
         info["lyrics"] = path
         with open(path, "w") as lrc_file:
@@ -148,12 +148,12 @@ class FFmpegMusicMetadata(yt_dlp.FFmpegPostProcessor):
             song_data = self.songs_data[title]
         else:
             self.to_screen(f"Unable to find metadata for track {title}");
+            return {}
 
         # song_data = self.songs_data[video_id] if video_id in self.songs_data else self.songs
         song = self.ytmusic.get_song(video_id)
-        song_credits = self.ytmusic.get_song_credits(song_data["credits_browse_id"])
-        if "other_sections" in song_credits and len(song_credits["other_sections"]) > 0:
-            print("-----------------OTHER SECTIONS", song_credits["other_sections"])
+        # if "credits_browse_id" in song_data:
+        #     song_credits = self.ytmusic.get_song_credits(song_data["credits_browse_id"])
         # playlist = ytmusic.get_watch_playlist(track["videoId"])
         return {
             "title": song_data["title"],
@@ -235,6 +235,13 @@ def format_date(date):
             return "-".join(components)
         return components
 
+def is_song_in_directory(parent_directory, song_name):
+    for root, dirs, files in os.walk(parent_directory):
+        if "Singles" not in root:
+            for file in files:
+                if song_name.lower() in file.lower():
+                    return True
+    return False
 
 def get_thumbnail_url(thumbnails):
     MAX_ALLOWED_PIXELS = 1000 * 1000 # we don't want higher resolution images since they will take a lot of space
@@ -263,21 +270,6 @@ def get_yt_dlp_opts(output_template):
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'm4a',
             },
-            # {
-            #     'add_chapters': True,
-            #     'add_infojson': 'if_exists',
-            #     'add_metadata': True,
-            #     'key': 'FFmpegMetadata',
-            # },
-            # {
-            #     'format': 'png',
-            #     'key': 'FFmpegThumbnailsConvertor',
-            #     'when': 'before_dl',
-            # },
-            # {
-            #     'already_have_thumbnail': False, 
-            #     'key': 'EmbedThumbnail'
-            # },
         ],
         'postprocessor_args': {
             # crops the thumbnail to a square shape and resizes it to a fixed size
@@ -304,6 +296,10 @@ def get_yt_dlp_opts(output_template):
     }
 
 def yt_dlp_download(urls, opts_overrides, songs):
+    if "match_filter" in opts_overrides:
+        opts_overrides["match_filter"] = match_filter_and(opts_overrides["match_filter"], is_duplicate_track_filter)
+    else:
+        opts_overrides["match_filter"] = is_duplicate_track_filter
     for video_id in list(songs.keys()):
         title = songs[video_id]["title"]
         songs[title] = songs[video_id]
@@ -324,6 +320,25 @@ def get_singles_filter(exclude):
         return None
     return exclude_filter
 
+def is_duplicate_track_filter(info, *, incomplete):
+    title = info.get("title")
+    artists = info.get("artists")
+    if len(artists) == 1:
+        return None
+    for artist in artists:
+        parent_directory = f"{directory}/{artist}"
+        if os.path.isdir(parent_directory) and is_song_in_directory(parent_directory, title):
+            return "The track is already downloaded, skipping"
+    return None
+
+def match_filter_and(filter_a, filter_b):
+    def parent_filter(info, *, incomplete = True):
+        a = filter_a(info, incomplete=incomplete)
+        if a is None:
+            return filter_b(info, incomplete=incomplete)
+        return a
+    return parent_filter
+
 def get_album_songs_data(album, release_type = "album"):
     songs_data = {}
     album_artists = get_artists_names(album["artists"])
@@ -336,9 +351,12 @@ def get_album_songs_data(album, release_type = "album"):
             "total_tracks": album["trackCount"],
             "artists": get_artists_names(track["artists"]),
             "track_number": track["trackNumber"],
-            "credits_browse_id": track["creditsBrowseId"],
+            # "credits_browse_id": track["creditsBrowseId"],
             "release_type": release_type,
         }
+        if "creditsBrowseId" in track:
+            songs_data[track["videoId"]]["credits_browse_id"] =track["creditsBrowseId"]
+            
     return songs_data
 
 def download_artist(artist, directory = "./"):
@@ -384,20 +402,23 @@ def download_artist(artist, directory = "./"):
                 exclude.add(track["title"])
 
     ydl_opts = {
-        "output": f'{directory}/{artist["name"]}/Singles/%(album,playlist)s/%(track,title)s.%(ext)s',
-        "match_filter": get_singles_filter(exclude)
-    }
-    yt_dlp_download(singles_urls, ydl_opts, songs_data)
-    ydl_opts = {
         "output": f"{directory}/{artist["name"]}/%(album,playlist)s/%(track,title)s.%(ext)s"
     }
     yt_dlp_download(urls, ydl_opts, songs_data)
 
+    ydl_opts = {
+        "output": f'{directory}/{artist["name"]}/Singles/%(album,playlist)s/%(track,title)s.%(ext)s',
+        "match_filter": get_singles_filter(exclude)
+    }
+    yt_dlp_download(singles_urls, ydl_opts, songs_data)
+
     # artist_thumbnail = get_thumbnail_url(artist["thumbnails"])
     # download_image_url(artist_thumbnail, f"{directory}/{artist["name"]}/folder.png")
     for album in albums:
-        thumbnail = get_thumbnail_url(album["thumbnails"])
-        download_image_url(thumbnail, f"{directory}/{artist["name"]}/{album["title"]}/cover.png")
+        album_dir = f"{directory}/{artist["name"]}/{album["title"]}"
+        if os.path.isdir(album_dir):
+            thumbnail = get_thumbnail_url(album["thumbnails"])
+            download_image_url(thumbnail, f"{album_dir}/cover.png")
 
 
 def get_song_album_from_collection(song, albums):
@@ -457,30 +478,32 @@ def download():
                 "track_number": album["tracks"][track_index]["trackNumber"],
                 "album_artists": get_artists_names(album["artists"]),
                 "total_tracks": album["trackCount"],
-                "credits_browse_id": album["tracks"][track_index]["creditsBrowseId"],
+                # "credits_browse_id": album["tracks"][track_index]["creditsBrowseId"],
                 "release_type": album["type"].lower(),                
             },
         }
+        if "creditsBrowseId" in album["tracks"][track_index]:
+            songs_data[video_id]["credits_browse_id"] = album["tracks"][track_index]["creditsBrowseId"]
         path = f"{directory}/{song_path}/{song["videoDetails"]["title"]}"
         ydl_opts = {
             "output": f'{path}.%(ext)s'
         }
         yt_dlp_download([f"https://music.youtube.com/watch?v={video_id}"], ydl_opts, songs_data)
-        file = music_tag.load_file(f"{path}.m4a")
-        if f"{file["album"]}" == "":
-            file["album"] = album["title"]
-            file.save()
     elif chosen["resultType"] == "album":
         album = ytmusic.get_album(chosen["browseId"])
         artist = album["artists"][0]["name"]
+        output_insert = ""
+        if album["type"] == "Single":
+            output_insert = "/Singles"
+        path = f"{directory}/{artist}{output_insert}"
         ydl_opts = {
-            "output": f"{directory}/{artist}/%(album,playlist)s/%(track,title)s.%(ext)s",
+            "output": f"{path}/%(album,playlist)s/%(track,title)s.%(ext)s",
         }
         songs_data = get_album_songs_data(album)
         url = f"https://music.youtube.com/playlist?list={album["audioPlaylistId"]}"
         yt_dlp_download([url], ydl_opts, songs_data)
         thumbnail = get_thumbnail_url(album["thumbnails"])
-        download_image_url(thumbnail, f"{directory}/{artist}/{album["title"]}/cover.png")
+        download_image_url(thumbnail, f"{path}/{album["title"]}/cover.png")
     elif chosen["resultType"] == "artist":
         artist_browse_id = ""
         if "category" in chosen and chosen["category"] == "Top result":
