@@ -328,6 +328,7 @@ def is_duplicate_track_filter(info, *, incomplete):
     for artist in artists:
         parent_directory = f"{directory}/{artist}"
         if os.path.isdir(parent_directory) and is_song_in_directory(parent_directory, title):
+            print(f"skipping_track {title} - {info.get("filepath")}")
             return "The track is already downloaded, skipping"
     return None
 
@@ -394,7 +395,7 @@ def download_artist(artist, directory = "./"):
     for single in singles:
         singles_urls.append(f"https://music.youtube.com/playlist?list={single["playlistId"]}")
         album = ytmusic.get_album(single["browseId"])
-        songs_data |= get_album_songs_data(album, "single")
+        songs_data = get_album_songs_data(album, "single") | songs_data
         for track in album["tracks"]:
             if track["title"] in songs:
                 # index = songs.index(track["title"])
