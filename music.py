@@ -119,14 +119,13 @@ class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
 
         # track_path = Path(info["requested_downloads"][0]["filename"])
         track_path = Path(info["filepath"])
-        print("track path", track_path)
         path = f"{track_path.parent}/{track_path.stem}.lrc"
         info["lyrics"] = path
         with open(path, "w") as lrc_file:
             lrc_file.write(lyrics)
         return [], info
 
-class FFmpegMusicMetadata(yt_dlp.FFmpegPostProcessor):
+class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
 
     def __init__(self, ytmusic, songs_data, downloader = None):
         yt_dlp.FFmpegPostProcessor.__init__(self, downloader)
@@ -170,6 +169,34 @@ class FFmpegMusicMetadata(yt_dlp.FFmpegPostProcessor):
             "releasetype": song_data["release_type"],
         }
 
+    def get_ytdlp_tags(self, info):
+        tags = {}
+        if "track" in info:
+            tags["title"] = info.get("track")
+        elif "title" in info:
+            tags["title"] = info.get("title")
+
+        if "track_number" in info:
+            tags["tracknumber"] = info.get("track_number")
+
+        if "artist" in info:
+            tags["artist"] = info.get("artist")
+        elif "artists" in info:
+            tags["artist"] = ",".join(info.get("artists"))
+            tags["artists"] = info.get("artists")
+        elif "creator" in info:
+            tags["artist"] = info.get("creator")
+        elif "creators" in info:
+            tags["artist"] = ",".join(info.get("creators"))
+            tags["artists"] = info.get("creators")
+
+        if "genre" in info:
+            tags["genre"] = info.get("genre")
+        if "genres" in info:
+            tags["genre"] = ",".join(info.get("genres"))
+        return tags
+
+
 
     @yt_dlp.postprocessor.PostProcessor._restrict_to(images=False)
     def run(self, info):
@@ -177,8 +204,9 @@ class FFmpegMusicMetadata(yt_dlp.FFmpegPostProcessor):
             self.to_screen("Unsupported file type for music metadata emdedding")
             return [], info
         filename = info['filepath']
-
-        tags = self.get_yt_music_metadata(info["id"], info["title"])
+        
+        ytdlp_tags = self.get_ytdlp_tags(info)
+        tags = ytdlp_tags | self.get_yt_music_metadata(info["id"], info["title"])
         lyrics_file_path = None
         if "lyrics" in info:
             lyrics_file_path = info["lyrics"]
@@ -307,7 +335,7 @@ def yt_dlp_download(urls, opts_overrides, songs):
     ydl_opts = get_yt_dlp_opts(output_template) | opts_overrides
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.add_post_processor(LyricsDownloaderPP(ytmusic))
-        ydl.add_post_processor(FFmpegMusicMetadata(ytmusic, songs))
+        ydl.add_post_processor(MusicMetadataPP(ytmusic, songs))
         ydl.add_post_processor(yt_dlp.FFmpegThumbnailsConvertorPP(None, "png"))
         ydl.add_post_processor(yt_dlp.postprocessor.EmbedThumbnailPP())
         info = ydl.download(urls)
