@@ -6,6 +6,7 @@ import itertools
 import time
 from pathlib import Path
 import collections
+import subprocess
 
 import dotenv
 import requests
@@ -22,12 +23,25 @@ directory = os.getenv("OUTPUT_DIR", "./Music")
 port = os.getenv("PORT", 5000)
 lyrics_duration_diff = os.getenv("MAX_LYRICS_DURATION_DIFF", 15)
 thumbnail_size = os.getenv("THUMBNAIL_SIZE", 320)
+rsgain_path = os.getenv("RSGAIN_PATH", "rsgain")
 
 ytmusic = YTMusic()
+
 
 mp4_tag_mapping = {
     "releasetype": "----:com.apple.iTunes:MusicBrainz Album Type",
 }
+class AutoGainTagPP(yt_dlp.postprocessor.PostProcessor):
+    def run(self, info):
+        file_path = info["filepath"]
+        args = [rsgain_path, "custom", "--output", "--tagmode=i", file_path];
+        result = subprocess.run(args, capture_output=True, text=True) 
+        if result.returncode != 0:
+            self.to_screen("Failed to find gain to track")
+            self.to_screen(result.stdout)
+        else:
+            self.to_screen(result.stdout[result.stdout.find("\n")+1:])
+        return [], info
 class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
     client = LrclibClient("Mozilla/5.0 (X11; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0")
     def __init__(self, ytmusic = None, downloader = None):
@@ -336,6 +350,7 @@ def yt_dlp_download(urls, opts_overrides, songs):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.add_post_processor(LyricsDownloaderPP(ytmusic))
         ydl.add_post_processor(MusicMetadataPP(ytmusic, songs))
+        ydl.add_post_processor(AutoGainTagPP())
         ydl.add_post_processor(yt_dlp.FFmpegThumbnailsConvertorPP(None, "png"))
         ydl.add_post_processor(yt_dlp.postprocessor.EmbedThumbnailPP())
         info = ydl.download(urls)
