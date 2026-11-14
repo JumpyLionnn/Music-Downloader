@@ -6,3 +6,4 @@ Flask
 music_tag
 python-dotenv
 lrclib-python
+musicbrainzngs

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 import collections
 import subprocess
+import threading
 
 import dotenv
 import requests
@@ -16,6 +17,86 @@ from ytmusicapi import YTMusic
 from PIL import Image
 import music_tag
 from lrclib import LrclibClient
+import musicbrainzngs
+
+
+
+musicbrainzngs.set_useragent("music_downloader", "0.1", "fake_mail@example.com")
+all_genres = set()
+
+class GenreCollector(threading.Thread): 
+    def __init__(self): 
+        threading.Thread.__init__(self) 
+
+        # helper function to execute the threads
+    def run(self): 
+        offset = 0
+        genre_count = 1
+        while offset < genre_count:
+
+            page = requests.get(f"https://musicbrainz.org/ws/2/genre/all?limit=100&offset={offset}&fmt=json").json()
+            while "error" in page:
+                time.sleep(1)
+                page = requests.get(f"https://musicbrainz.org/ws/2/genre/all?limit=100&offset={offset}&fmt=json").json()
+
+            genre_count = page["genre-count"]
+            print(f"Fetching genres {len(all_genres)}/{genre_count}")
+            offset += len(page["genres"])
+            for genre in page["genres"]:
+                all_genres.add(genre["name"])
+            time.sleep(1)
+        print("Finsihed genres fetching")
+
+        
+collector = GenreCollector()
+collector.start()
+
+class MusicBrainzRelease:
+    def __init__(self, release):
+        self.release = release
+
+    @staticmethod
+    def find_release(artist_name, album_name, track_count):
+        result = musicbrainzngs.search_releases(artist=artist_name, release=album_name, limit=20)
+        if not result['release-list']:
+            print("Music brainz album not found")
+            return None
+
+        # Loop through the search results to find an exact match
+        for release in result['release-list']:
+            exact_artist = any(isinstance(artist, dict) and artist['name'].lower() == artist_name.lower() for artist in release['artist-credit'])
+            if release['title'].lower() == album_name.lower() and exact_artist:
+                release_id = release['id']
+                result = musicbrainzngs.get_release_by_id(release_id, includes=['recordings'])
+                tracks = result['release']['medium-list'][0]['track-list']
+                if track_count == len(tracks):
+                    return MusicBrainzRelease(result["release"])
+        # If no exact match is found, return a message indicating this
+        print(f"MusicBrainz: Exact album not found {album_name}.")
+        return None
+
+    def get_track_genres(self, track_name):
+        track_name = track_name.lower()
+        tracks = self.release['medium-list'][0]['track-list']
+        for track in tracks:
+            track = track["recording"]
+            if track["title"].lower() == track_name:
+                recording = musicbrainzngs.get_recording_by_id(track["id"], includes=["tags"])
+                recording = recording["recording"]
+                if "tag-list" not in recording:
+                    return []
+                tags = recording["tag-list"]
+                track_genres = []
+                for tag in tags:
+                    if tag["name"] in all_genres:
+                        track_genres.append(tag["name"])
+                print(track_genres)
+                return track_genres
+                #return recording
+
+        return []
+
+
 
 dotenv.load_dotenv()
 
@@ -154,7 +235,10 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
             yield from ('-vn', '-acodec', 'copy')
     
     def get_yt_music_metadata(self, video_id, title):
-
+        
+        genres = []
+        if "mb_release" in self.data:
+            genres = self.data["mb_release"].get_track_genres(self.data["title"])
         # song_data = self.songs_data[video_id] if video_id in self.songs_data else self.songs
         song = self.ytmusic.get_song(video_id)
         # if "credits_browse_id" in song_data:
@@ -169,6 +253,7 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
             "albumartists": self.data["album_artists"],
             "totaltracks": self.data["total_tracks"],
             "tracknumber": self.data["track_number"],
+            "genre": ",".join(genres),
             # "releasedate": "T".split(song["microformat"]["microformatDataRenderer"]["publishDate"])[0],
             # "year": song["microformat"]["microformatDataRenderer"]["publishDate"].split("-")[0],
             # "producers": song_credits["produced_by"]["data"],
@@ -383,6 +468,7 @@ def get_album_songs_data(album, release_type = "album"):
     songs_data = []
     album_artists = get_artists_names(album["artists"])
     album_title = album["title"]
+    mb_release = MusicBrainzRelease.find_release(album_artists[0], album_title, len(album["tracks"]))
     for track in album["tracks"]:
         data = {
             "url": f"https://music.youtube.com/watch?v={track["videoId"]}",
@@ -394,9 +480,12 @@ def get_album_songs_data(album, release_type = "album"):
             "track_number": track["trackNumber"],
             # "credits_browse_id": track["creditsBrowseId"],
             "release_type": release_type,
+            "genres": []
         }  
         if "creditsBrowseId" in track:
             data["credits_browse_id"] = track["creditsBrowseId"]
+        if mb_release is not None:
+            data["mb_release"] = mb_release
         songs_data.append(data)
             
     return songs_data
@@ -509,6 +598,7 @@ def download():
         song_path, album, track_index = get_song_directory(song)
         if song_path == None:
             return "Not a song", 400
+        album_artists = get_artists_names(album["artists"])
         songs_data = [
             {
                 "url": f"https://music.youtube.com/watch?v={video_id}",
@@ -516,14 +606,17 @@ def download():
                 "album": album["title"],
                 "artists": get_artists_names(album["tracks"][track_index]["artists"]),
                 "track_number": album["tracks"][track_index]["trackNumber"],
-                "album_artists": get_artists_names(album["artists"]),
+                "album_artists": album_artists,
                 "total_tracks": album["trackCount"],
                 # "credits_browse_id": album["tracks"][track_index]["creditsBrowseId"],
-                "release_type": album["type"].lower(),                
+                "release_type": album["type"].lower(),
             },
         ]
         if "creditsBrowseId" in album["tracks"][track_index]:
             songs_data[0]["credits_browse_id"] = album["tracks"][track_index]["creditsBrowseId"]
+        mb_release = MusicBrainzRelease.find_release(album_artists[0], album_title, len(album["tracks"]))
+        if mb_release is not None:
+            songs_data[0]["mb_release"] = mb_release
         path = f"{directory}/{song_path}/{song["videoDetails"]["title"]}"
         ydl_opts = {
             "output": f'{path}.%(ext)s'

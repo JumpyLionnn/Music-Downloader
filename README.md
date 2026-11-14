@@ -10,6 +10,7 @@ It's a quick and dirty web ui and the server is not secure at all, use at your o
 It is made using yt-dlp and youtube music web page api to browse and download tracks
 The server will also attempt to download lyrics from lrc lib, although as I have observed, it's not that reliable
 In addition, rsgain will try to adjust the gain of the song automatically
+Song Genres will be searched for using musicbrainz api and embedded if found
 
 100% Human made
 
