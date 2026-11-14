@@ -44,14 +44,14 @@ class AutoGainTagPP(yt_dlp.postprocessor.PostProcessor):
         return [], info
 class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
     client = LrclibClient("Mozilla/5.0 (X11; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0")
-    def __init__(self, ytmusic = None, downloader = None):
+    def __init__(self, ytmusic = None, song = None, downloader = None):
         super().__init__(downloader)
         self.ytmusic = ytmusic
+        self.song = song
 
     def get_lrclib_lyrics(self, info):
-        album = info["album"]
-        artists = info["artists"]
-        title = info["title"]
+        artists = info.get("artists") if self.song is None else self.song["artists"]
+        title = info.get("title") if self.song is None else self.song["title"]
 
         # path = Path(info["requested_downloads"][0]["filename"])
         duration = int(info["duration"])
@@ -72,7 +72,6 @@ class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
         best_res = None
         for result in results:
             if not result.instrumental:
-                # print(f"id: {result.song_id} status: {result.status}, duration: {result.duration}")
                 if result.status == "Synced" and result.duration is not None:
                     duration_diff = abs(result.duration - duration)
                     if duration_diff <= lyrics_duration_diff:
@@ -135,16 +134,17 @@ class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
         track_path = Path(info["filepath"])
         path = f"{track_path.parent}/{track_path.stem}.lrc"
         info["lyrics"] = path
+        self.to_screen(f"Downloaded lyrics to {path}.");
         with open(path, "w") as lrc_file:
             lrc_file.write(lyrics)
         return [], info
 
 class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
 
-    def __init__(self, ytmusic, songs_data, downloader = None):
+    def __init__(self, ytmusic, data, downloader = None):
         yt_dlp.FFmpegPostProcessor.__init__(self, downloader)
         self.ytmusic = ytmusic
-        self.songs_data = songs_data
+        self.data = data
 
     @staticmethod
     def _options(target_ext):
@@ -154,14 +154,6 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
             yield from ('-vn', '-acodec', 'copy')
     
     def get_yt_music_metadata(self, video_id, title):
-        song_data = {}
-        if video_id in self.songs_data:
-            song_data = self.songs_data[video_id]
-        elif title in self.songs_data:
-            song_data = self.songs_data[title]
-        else:
-            self.to_screen(f"Unable to find metadata for track {title}");
-            return {}
 
         # song_data = self.songs_data[video_id] if video_id in self.songs_data else self.songs
         song = self.ytmusic.get_song(video_id)
@@ -169,18 +161,18 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
         #     song_credits = self.ytmusic.get_song_credits(song_data["credits_browse_id"])
         # playlist = ytmusic.get_watch_playlist(track["videoId"])
         return {
-            "title": song_data["title"],
-            "album": song_data["album"],
-            "artist": ",".join(song_data["artists"]),
-            "artists": song_data["artists"],
-            "albumartist": ",".join(song_data["album_artists"]),
-            "albumartists": song_data["album_artists"],
-            "totaltracks": song_data["total_tracks"],
-            "tracknumber": song_data["track_number"],
+            "title": self.data["title"],
+            "album": self.data["album"],
+            "artist": ",".join(self.data["artists"]),
+            "artists": self.data["artists"],
+            "albumartist": ",".join(self.data["album_artists"]),
+            "albumartists": self.data["album_artists"],
+            "totaltracks": self.data["total_tracks"],
+            "tracknumber": self.data["track_number"],
             # "releasedate": "T".split(song["microformat"]["microformatDataRenderer"]["publishDate"])[0],
             # "year": song["microformat"]["microformatDataRenderer"]["publishDate"].split("-")[0],
             # "producers": song_credits["produced_by"]["data"],
-            "releasetype": song_data["release_type"],
+            "releasetype": self.data["release_type"],
         }
 
     def get_ytdlp_tags(self, info):
@@ -193,20 +185,20 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
         if "track_number" in info:
             tags["tracknumber"] = info.get("track_number")
 
-        if "artist" in info:
+        if "artist" in info and info.get("artist") is not None:
             tags["artist"] = info.get("artist")
-        elif "artists" in info:
+        elif "artists" in info and info.get("artists") is not None:
             tags["artist"] = ",".join(info.get("artists"))
             tags["artists"] = info.get("artists")
-        elif "creator" in info:
+        elif "creator" in info and info.get("creator") is not None:
             tags["artist"] = info.get("creator")
-        elif "creators" in info:
+        elif "creators" in info and info.get("creators") is not None:
             tags["artist"] = ",".join(info.get("creators"))
             tags["artists"] = info.get("creators")
 
-        if "genre" in info:
+        if "genre" in info and info.get("genre") is not None:
             tags["genre"] = info.get("genre")
-        if "genres" in info:
+        if "genres" in info and info.get("genres") is not None:
             tags["genre"] = ",".join(info.get("genres"))
         return tags
 
@@ -227,7 +219,7 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
             with open(lyrics_file_path, "r") as lrc_file:
                 lyrics = lrc_file.read()
                 tags["lyrics"] = lyrics
-
+    
         file = music_tag.load_file(filename)
         for key, value in tags.items():
             try:
@@ -238,6 +230,7 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
                     value = music_tag.mutagen.mp4.MP4FreeForm(value.encode("utf-8"))
                     file.mfile.tags[tag] = value
         file.save()
+        self.to_screen("Downloaded Metadata")
         if lyrics_file_path is not None:
             self._delete_downloaded_files(lyrics_file_path, info=info)
             del info["lyrics"]
@@ -304,6 +297,7 @@ def get_yt_dlp_opts(output_template):
     return {
         'final_ext': 'm4a',
         'format': 'm4a/bestaudio/best',
+        'ignoreerrors': True,
         'writethumbnail': True,
         'outtmpl': {'default': output_template, 'pl_thumbnail': ''},
         # See help(yt_dlp.postprocessor) for a list of available Postprocessors and their arguments
@@ -342,31 +336,33 @@ def yt_dlp_download(urls, opts_overrides, songs):
         opts_overrides["match_filter"] = match_filter_and(opts_overrides["match_filter"], is_duplicate_track_filter)
     else:
         opts_overrides["match_filter"] = is_duplicate_track_filter
-    for video_id in list(songs.keys()):
-        title = songs[video_id]["title"]
-        songs[title] = songs[video_id]
-    output_template = opts_overrides.pop("output", "%(track,title)s.%(ext)s")
-    ydl_opts = get_yt_dlp_opts(output_template) | opts_overrides
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.add_post_processor(LyricsDownloaderPP(ytmusic))
-        ydl.add_post_processor(MusicMetadataPP(ytmusic, songs))
-        ydl.add_post_processor(AutoGainTagPP())
-        ydl.add_post_processor(yt_dlp.FFmpegThumbnailsConvertorPP(None, "png"))
-        ydl.add_post_processor(yt_dlp.postprocessor.EmbedThumbnailPP())
-        info = ydl.download(urls)
+    #for video_id in list(songs.keys()):
+    #    title = songs[video_id]["title"]
+    #    songs[title] = songs[video_id]
+    output_template = opts_overrides.pop("output", "%(title)s.%(ext)s")
+    for song in songs:
+        output = output_template.replace("%(album)s", song["album"]).replace("%(title)s", song["title"])
+        ydl_opts = get_yt_dlp_opts(output) | opts_overrides
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.add_post_processor(LyricsDownloaderPP(ytmusic, song))
+            ydl.add_post_processor(MusicMetadataPP(ytmusic, song))
+            ydl.add_post_processor(AutoGainTagPP())
+            ydl.add_post_processor(yt_dlp.FFmpegThumbnailsConvertorPP(None, "png"))
+            ydl.add_post_processor(yt_dlp.postprocessor.EmbedThumbnailPP())
+            info = ydl.download([song["url"]])
 
-def get_singles_filter(exclude):
-    def exclude_filter(info, *, incomplete):
-        title = info.get('title')
-        if title in exclude:
-            return 'The music is excluded since it exists in an album'
-        return None
-    return exclude_filter
+# def get_singles_filter(exclude):
+#     def exclude_filter(info, *, incomplete):
+#         title = info.get('title')
+#         if title in exclude:
+#             return 'The music is excluded since it exists in an album'
+#         return None
+#     return exclude_filter
 
-def is_duplicate_track_filter(info, *, incomplete):
+def is_duplicate_track_filter(info, *, incomplete=True):
     title = info.get("title")
     artists = info.get("artists")
-    if len(artists) == 1:
+    if artists is None or len(artists) == 1:
         return None
     for artist in artists:
         parent_directory = f"{directory}/{artist}"
@@ -376,19 +372,20 @@ def is_duplicate_track_filter(info, *, incomplete):
     return None
 
 def match_filter_and(filter_a, filter_b):
-    def parent_filter(info, *, incomplete = True):
-        a = filter_a(info, incomplete=incomplete)
+    def parent_filter(info, *args, incomplete = True):
+        a = filter_a(info, *args, incomplete=incomplete)
         if a is None:
-            return filter_b(info, incomplete=incomplete)
+            return filter_b(info, *args, incomplete=incomplete)
         return a
     return parent_filter
 
 def get_album_songs_data(album, release_type = "album"):
-    songs_data = {}
+    songs_data = []
     album_artists = get_artists_names(album["artists"])
     album_title = album["title"]
     for track in album["tracks"]:
-        songs_data[track["videoId"]] = {
+        data = {
+            "url": f"https://music.youtube.com/watch?v={track["videoId"]}",
             "title": track["title"],
             "album_artists": album_artists,
             "album": album_title,
@@ -397,9 +394,10 @@ def get_album_songs_data(album, release_type = "album"):
             "track_number": track["trackNumber"],
             # "credits_browse_id": track["creditsBrowseId"],
             "release_type": release_type,
-        }
+        }  
         if "creditsBrowseId" in track:
-            songs_data[track["videoId"]]["credits_browse_id"] =track["creditsBrowseId"]
+            data["credits_browse_id"] = track["creditsBrowseId"]
+        songs_data.append(data)
             
     return songs_data
 
@@ -414,47 +412,44 @@ def download_artist(artist, directory = "./"):
             playlist_id = album["playlistId"]
         urls.append(f"https://music.youtube.com/playlist?list={playlist_id}")
 
-    songs = []
-    songs_data = {}
+    songs_names = []
+    album_songs = []
     # song_albums = []
     for album in albums:
         album_data = ytmusic.get_album(album["browseId"])
-        songs_data |= get_album_songs_data(album_data)
+        album_songs.extend(get_album_songs_data(album_data))
         for song in album_data["tracks"]:
-            songs.append(song["title"])
+            songs_names.append(song["title"])
             # song_albums.append(album_data["title"])
     singles = get_singles(artist)
     singles_urls = []
-    # for album in singles:
-    #     singles_urls.append(f"https://music.youtube.com/playlist?list={album["playlistId"]}")
-        # print(album)
-    # print(urls)
-    # singles = ytmusic.get_album(artist["singles"]["browseId"])
-    # print(singles["audioPlaylistId"])
     if directory.endswith("/"):
         directory = directory[:-1]
     
-    exclude = set()
+    #exclude = set()
+    single_songs = []
     for single in singles:
         singles_urls.append(f"https://music.youtube.com/playlist?list={single["playlistId"]}")
         album = ytmusic.get_album(single["browseId"])
-        songs_data = get_album_songs_data(album, "single") | songs_data
-        for track in album["tracks"]:
-            if track["title"] in songs:
+        songs = get_album_songs_data(album, "single")
+        songs = [track for track in songs if track["title"] not in songs_names]
+        single_songs.extend(songs)
+        #for track in album["tracks"]:
+        #  if track["title"] in songs_names:
                 # index = songs.index(track["title"])
                 # album_name = song_albums[index]
-                exclude.add(track["title"])
+     #           exclude.add(track["title"])
 
     ydl_opts = {
-        "output": f"{directory}/{artist["name"]}/%(album,playlist)s/%(track,title)s.%(ext)s"
+        "output": f"{directory}/{artist["name"]}/%(album)s/%(title)s.%(ext)s"
     }
-    yt_dlp_download(urls, ydl_opts, songs_data)
+    yt_dlp_download(urls, ydl_opts, album_songs)
 
     ydl_opts = {
-        "output": f'{directory}/{artist["name"]}/Singles/%(album,playlist)s/%(track,title)s.%(ext)s',
-        "match_filter": get_singles_filter(exclude)
+        "output": f'{directory}/{artist["name"]}/Singles/%(album)s/%(title)s.%(ext)s',
+        # "match_filter": get_singles_filter(exclude)
     }
-    yt_dlp_download(singles_urls, ydl_opts, songs_data)
+    yt_dlp_download(singles_urls, ydl_opts, single_songs)
 
     # artist_thumbnail = get_thumbnail_url(artist["thumbnails"])
     # download_image_url(artist_thumbnail, f"{directory}/{artist["name"]}/folder.png")
@@ -514,8 +509,9 @@ def download():
         song_path, album, track_index = get_song_directory(song)
         if song_path == None:
             return "Not a song", 400
-        songs_data = {
-            video_id: {
+        songs_data = [
+            {
+                "url": f"https://music.youtube.com/watch?v={video_id}",
                 "title": song["videoDetails"]["title"],
                 "album": album["title"],
                 "artists": get_artists_names(album["tracks"][track_index]["artists"]),
@@ -525,14 +521,14 @@ def download():
                 # "credits_browse_id": album["tracks"][track_index]["creditsBrowseId"],
                 "release_type": album["type"].lower(),                
             },
-        }
+        ]
         if "creditsBrowseId" in album["tracks"][track_index]:
-            songs_data[video_id]["credits_browse_id"] = album["tracks"][track_index]["creditsBrowseId"]
+            songs_data[0]["credits_browse_id"] = album["tracks"][track_index]["creditsBrowseId"]
         path = f"{directory}/{song_path}/{song["videoDetails"]["title"]}"
         ydl_opts = {
             "output": f'{path}.%(ext)s'
         }
-        yt_dlp_download([f"https://music.youtube.com/watch?v={video_id}"], ydl_opts, songs_data)
+        yt_dlp_download([], ydl_opts, songs_data)
     elif chosen["resultType"] == "album":
         album = ytmusic.get_album(chosen["browseId"])
         artist = album["artists"][0]["name"]
@@ -541,7 +537,7 @@ def download():
             output_insert = "/Singles"
         path = f"{directory}/{artist}{output_insert}"
         ydl_opts = {
-            "output": f"{path}/%(album,playlist)s/%(track,title)s.%(ext)s",
+            "output": f"{path}/%(album)s/%(title)s.%(ext)s",
         }
         songs_data = get_album_songs_data(album)
         url = f"https://music.youtube.com/playlist?list={album["audioPlaylistId"]}"
