@@ -614,7 +614,7 @@ def download():
         ]
         if "creditsBrowseId" in album["tracks"][track_index]:
             songs_data[0]["credits_browse_id"] = album["tracks"][track_index]["creditsBrowseId"]
-        mb_release = MusicBrainzRelease.find_release(album_artists[0], album_title, len(album["tracks"]))
+        mb_release = MusicBrainzRelease.find_release(album_artists[0], album["title"], len(album["tracks"]))
         if mb_release is not None:
             songs_data[0]["mb_release"] = mb_release
         path = f"{directory}/{song_path}/{song["videoDetails"]["title"]}"
