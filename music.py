@@ -18,6 +18,7 @@ from PIL import Image
 import music_tag
 from lrclib import LrclibClient
 import musicbrainzngs
+from confusables import confusable_characters
 
 
 
@@ -51,6 +52,29 @@ class GenreCollector(threading.Thread):
 collector = GenreCollector()
 collector.start()
 
+def date_to_num(date):
+    parts = date.split("-")
+    if len(parts) < 3:
+        return (int(parts[0]) + 1) * 100 * 100
+    return int(parts[0]) * 100 * 100 + int(parts[1]) * 100 + int(parts[2])
+
+def create_confusable_map(chars):
+    conf_map = {}
+    for c in chars:
+        for confusable in confusable_characters(c):
+            if c != confusable:
+                conf_map[confusable] = c
+    return conf_map
+
+confusable_map = create_confusable_map([",", "'", ":", "\"", ".", "!", "-", "_", "/", "\\", "&", "+", "="])
+
+def normalize_str(st):
+    st = list(st.lower())
+    for i, char in enumerate(st):
+        if char in confusable_map:
+            st[i] = confusable_map[char]
+    return "".join(st)
+
 class MusicBrainzRelease:
     def __init__(self, release):
         self.release = release
@@ -65,7 +89,7 @@ class MusicBrainzRelease:
         # Loop through the search results to find an exact match
         for release in result['release-list']:
             exact_artist = any(isinstance(artist, dict) and artist['name'].lower() == artist_name.lower() for artist in release['artist-credit'])
-            if release['title'].lower() == album_name.lower() and exact_artist:
+            if normalize_str(release['title']) == normalize_str(album_name) and exact_artist:
                 release_id = release['id']
                 result = musicbrainzngs.get_release_by_id(release_id, includes=['recordings'])
                 tracks = result['release']['medium-list'][0]['track-list']
@@ -74,27 +98,34 @@ class MusicBrainzRelease:
         # If no exact match is found, return a message indicating this
         print(f"MusicBrainz: Exact album not found {album_name}.")
         return None
+    
+    def _get_recording_genres(self, recording):
+        if "tag-list" not in recording:
+            return []
+        tags = recording["tag-list"]
+        track_genres = []
+        for tag in tags:
+            if tag["name"] in all_genres:
+                track_genres.append(tag["name"])
+        #print(track_genres)
+        return track_genres
 
-    def get_track_genres(self, track_name):
-        track_name = track_name.lower()
+    def get_track_metadata(self, track_name):
+        track_name = normalize_str(track_name)
         tracks = self.release['medium-list'][0]['track-list']
         for track in tracks:
             track = track["recording"]
-            if track["title"].lower() == track_name:
-                recording = musicbrainzngs.get_recording_by_id(track["id"], includes=["tags"])
+            if normalize_str(track["title"]) == track_name:
+                recording = musicbrainzngs.get_recording_by_id(track["id"], includes=["tags", "releases", "ratings"])
                 recording = recording["recording"]
-                if "tag-list" not in recording:
-                    return []
-                tags = recording["tag-list"]
-                track_genres = []
-                for tag in tags:
-                    if tag["name"] in all_genres:
-                        track_genres.append(tag["name"])
-                print(track_genres)
-                return track_genres
+                release_date = min(recording["release-list"], key=lambda release: date_to_num(release["date"]))
+                return {
+                    "genres": self._get_recording_genres(recording),
+                    "releasedate": release_date["date"]
+                }
                 #return recording
 
-        return []
+        return None
 
 
 
@@ -111,6 +142,7 @@ ytmusic = YTMusic()
 
 mp4_tag_mapping = {
     "releasetype": "----:com.apple.iTunes:MusicBrainz Album Type",
+    "releasedate": "----:com.apple.iTunes:RELEASEDATE",
 }
 class AutoGainTagPP(yt_dlp.postprocessor.PostProcessor):
     def run(self, info):
@@ -236,15 +268,13 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
     
     def get_yt_music_metadata(self, video_id, title):
         
-        genres = []
-        if "mb_release" in self.data:
-            genres = self.data["mb_release"].get_track_genres(self.data["title"])
+        mb_metadata = {}
         # song_data = self.songs_data[video_id] if video_id in self.songs_data else self.songs
         song = self.ytmusic.get_song(video_id)
         # if "credits_browse_id" in song_data:
         #     song_credits = self.ytmusic.get_song_credits(song_data["credits_browse_id"])
         # playlist = ytmusic.get_watch_playlist(track["videoId"])
-        return {
+        data = {
             "title": self.data["title"],
             "album": self.data["album"],
             "artist": ",".join(self.data["artists"]),
@@ -253,12 +283,17 @@ class MusicMetadataPP(yt_dlp.FFmpegPostProcessor):
             "albumartists": self.data["album_artists"],
             "totaltracks": self.data["total_tracks"],
             "tracknumber": self.data["track_number"],
-            "genre": ",".join(genres),
             # "releasedate": "T".split(song["microformat"]["microformatDataRenderer"]["publishDate"])[0],
             # "year": song["microformat"]["microformatDataRenderer"]["publishDate"].split("-")[0],
             # "producers": song_credits["produced_by"]["data"],
             "releasetype": self.data["release_type"],
         }
+        if "mb_release" in self.data:
+            mb_metadata = self.data["mb_release"].get_track_metadata(self.data["title"])
+            if mb_metadata is not None:
+                data["genre"] = ",".join(mb_metadata["genres"])
+                data["releasedate"] = mb_metadata["releasedate"]
+        return data
 
     def get_ytdlp_tags(self, info):
         tags = {}
