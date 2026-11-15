@@ -19,7 +19,10 @@
                 }
             }
 
-            function download(result, event) {
+            const results = {{ results|safe }}
+
+            function download(index, event) {
+                const result = results[index];
                 const parent = event.srcElement.parentNode;
                 const loader = event.srcElement.nextElementSibling;
                 loader.classList.add("loader");
@@ -92,7 +95,7 @@
                     </div>
                     {% endif %}
                     <div style="display:flex;align-items: center;gap: 3em;">
-                        <button onclick="download({{ result|safe }}, event)">Download</button>
+                        <button onclick="download({{loop.index0}}, event)">Download</button>
                         <div></div>
                     </div>
                 </div>
