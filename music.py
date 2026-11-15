@@ -118,7 +118,7 @@ class MusicBrainzRelease:
             if normalize_str(track["title"]) == track_name:
                 recording = musicbrainzngs.get_recording_by_id(track["id"], includes=["tags", "releases", "ratings"])
                 recording = recording["recording"]
-                release_date = min(recording["release-list"], key=lambda release: date_to_num(release["date"]))
+                release_date = min(recording["release-list"], key=lambda release: (date_to_num(release["date"]) if "date" in release else 10000000000))
                 return {
                     "genres": self._get_recording_genres(recording),
                     "releasedate": release_date["date"]
@@ -163,38 +163,41 @@ class LyricsDownloaderPP(yt_dlp.postprocessor.PostProcessor):
         self.song = song
 
     def get_lrclib_lyrics(self, info):
-        artists = info.get("artists") if self.song is None else self.song["artists"]
+        artists = info.get("artists") if self.song is None else self.song["artist_names"]
         title = info.get("title") if self.song is None else self.song["title"]
 
         # path = Path(info["requested_downloads"][0]["filename"])
         duration = int(info["duration"])
         # time.sleep(1)
         results = []
-        try:
-            results = self.client.search(title, artists[0])
-        except:
-            self.to_screen("Encountered an error while fetching lyrics, trying again...")
-            time.sleep(8)
+        for artist in artists:
             try:
-                results = self.client.search(title, artists[0])
+                results = self.client.search(title, artist)
             except:
-                self.to_screen("Encountered an error again while fetching lyrics, skipping...") 
-                return None
+                self.to_screen("Encountered an error while fetching lyrics, trying again...")
+                time.sleep(8)
+                try:
+                    results = self.client.search(title, artists[0])
+                except:
+                    self.to_screen("Encountered an error again while fetching lyrics, skipping...") 
+                    return None
 
         
-        best_res = None
-        for result in results:
-            if not result.instrumental:
-                if result.status == "Synced" and result.duration is not None:
-                    duration_diff = abs(result.duration - duration)
-                    if duration_diff <= lyrics_duration_diff:
-                        if best_res is None or duration_diff < best_res["duration_diff"]:
-                            best_res = {
-                                "id": result.song_id,
-                                "lyrics": result.synced_lyrics,
-                                "duration_diff": duration_diff,
-                            }
-        return best_res
+            best_res = None
+            for result in results:
+                if not result.instrumental:
+                    if result.status == "Synced" and result.duration is not None:
+                        duration_diff = abs(result.duration - duration)
+                        if duration_diff <= lyrics_duration_diff:
+                            if best_res is None or duration_diff < best_res["duration_diff"]:
+                                best_res = {
+                                    "id": result.song_id,
+                                    "lyrics": result.synced_lyrics,
+                                    "duration_diff": duration_diff,
+                                }
+            if best_res is not None:
+                return best_res
+        return None
     
     @staticmethod
     def yt_lyric_time_label(time):
@@ -499,19 +502,22 @@ def match_filter_and(filter_a, filter_b):
         return a
     return parent_filter
 
-def get_album_songs_data(album, release_type = "album"):
+def get_album_songs_data(album, release_type, artist_name):
     songs_data = []
     album_artists = get_artists_names(album["artists"])
     album_title = album["title"]
     mb_release = MusicBrainzRelease.find_release(album_artists[0], album_title, len(album["tracks"]))
     for track in album["tracks"]:
+        artists = get_artists_names(track["artists"])
         data = {
             "url": f"https://music.youtube.com/watch?v={track["videoId"]}",
             "title": track["title"],
             "album_artists": album_artists,
             "album": album_title,
             "total_tracks": album["trackCount"],
-            "artists": get_artists_names(track["artists"]),
+            "artists": artists,
+            # There are sometimes different names for the same artist
+            "artist_names": list(set(artists + album_artists + [artist_name])),
             "track_number": track["trackNumber"],
             # "credits_browse_id": track["creditsBrowseId"],
             "release_type": release_type,
@@ -541,7 +547,7 @@ def download_artist(artist, directory = "./"):
     # song_albums = []
     for album in albums:
         album_data = ytmusic.get_album(album["browseId"])
-        album_songs.extend(get_album_songs_data(album_data))
+        album_songs.extend(get_album_songs_data(album_data, "album", artist["name"]))
         for song in album_data["tracks"]:
             songs_names.append(song["title"])
             # song_albums.append(album_data["title"])
@@ -555,7 +561,7 @@ def download_artist(artist, directory = "./"):
     for single in singles:
         singles_urls.append(f"https://music.youtube.com/playlist?list={single["playlistId"]}")
         album = ytmusic.get_album(single["browseId"])
-        songs = get_album_songs_data(album, "single")
+        songs = get_album_songs_data(album, "single", artist["name"])
         songs = [track for track in songs if track["title"] not in songs_names]
         single_songs.extend(songs)
         #for track in album["tracks"]:
@@ -597,12 +603,12 @@ def get_song_directory(song):
     albums = get_albums(artist)
     album, track_index = get_song_album_from_collection(song, albums)
     if album is not None:
-        return f"{artist["name"]}/{album["title"]}", album, track_index
+        return f"{artist["name"]}/{album["title"]}", album, track_index, artist
 
     singles = get_singles(artist)
     album, track_index = get_song_album_from_collection(song, singles)
     if album is not None:
-        return f"{artist["name"]}/Singles/{album["title"]}", album, track_index
+        return f"{artist["name"]}/Singles/{album["title"]}", album, track_index, artist
     return None, None
 
 def get_artists_names(artists):
@@ -630,18 +636,21 @@ def download():
     if chosen["resultType"] == "song":
         video_id = chosen["videoId"]
         song = ytmusic.get_song(video_id)
-        song_path, album, track_index = get_song_directory(song)
+        song_path, album, track_index, artist = get_song_directory(song)
         if song_path == None:
             return "Not a song", 400
         album_artists = get_artists_names(album["artists"])
+        artists = get_artists_names(album["tracks"][track_index]["artists"])
         songs_data = [
             {
                 "url": f"https://music.youtube.com/watch?v={video_id}",
                 "title": song["videoDetails"]["title"],
                 "album": album["title"],
-                "artists": get_artists_names(album["tracks"][track_index]["artists"]),
+                "artists": artists,
                 "track_number": album["tracks"][track_index]["trackNumber"],
                 "album_artists": album_artists,
+                # There are sometimes different names for the same artist
+                "artist_names": list(set(artists + album_artists + [artist["name"]])),
                 "total_tracks": album["trackCount"],
                 # "credits_browse_id": album["tracks"][track_index]["creditsBrowseId"],
                 "release_type": album["type"].lower(),
@@ -659,15 +668,19 @@ def download():
         yt_dlp_download([], ydl_opts, songs_data)
     elif chosen["resultType"] == "album":
         album = ytmusic.get_album(chosen["browseId"])
-        artist = album["artists"][0]["name"]
+        artist_id = album["artists"][0]["id"]
+        artist = ytmusic.get_artist(artist_id)
+        # There are inconsistencies between artist names
+        artist_name = artist["name"]
+        # artist = album["artists"][0]["name"]
         output_insert = ""
         if album["type"] == "Single":
             output_insert = "/Singles"
-        path = f"{directory}/{artist}{output_insert}"
+        path = f"{directory}/{artist_name}{output_insert}"
         ydl_opts = {
             "output": f"{path}/%(album)s/%(title)s.%(ext)s",
         }
-        songs_data = get_album_songs_data(album)
+        songs_data = get_album_songs_data(album, "album", artist["name"])
         url = f"https://music.youtube.com/playlist?list={album["audioPlaylistId"]}"
         yt_dlp_download([url], ydl_opts, songs_data)
         thumbnail = get_thumbnail_url(album["thumbnails"])
