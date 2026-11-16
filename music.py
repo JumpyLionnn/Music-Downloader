@@ -549,13 +549,13 @@ def get_album_songs_data(album, release_type, artist_name):
 def download_artist(artist, directory = "./"):
     albums = get_albums(artist)
     urls = []
-    for album in albums:
-        playlist_id = ""
-        if "audioPlaylistId" in album:
-            playlist_id = album["audioPlaylistId"]
-        else:
-            playlist_id = album["playlistId"]
-        urls.append(f"https://music.youtube.com/playlist?list={playlist_id}")
+    #for album in albums:
+        # playlist_id = ""
+        # if "audioPlaylistId" in album:
+        #     playlist_id = album["audioPlaylistId"]
+        # else:
+        #     playlist_id = album["playlistId"]
+        #urls.append(f"https://music.youtube.com/playlist?list={playlist_id}")
 
     songs_names = []
     album_songs = []
@@ -574,7 +574,7 @@ def download_artist(artist, directory = "./"):
     #exclude = set()
     single_songs = []
     for single in singles:
-        singles_urls.append(f"https://music.youtube.com/playlist?list={single["playlistId"]}")
+        #singles_urls.append(f"https://music.youtube.com/playlist?list={single["playlistId"]}")
         album = ytmusic.get_album(single["browseId"])
         songs = get_album_songs_data(album, "single", artist["name"])
         songs = [track for track in songs if track["title"] not in songs_names]
@@ -588,13 +588,13 @@ def download_artist(artist, directory = "./"):
     ydl_opts = {
         "output": f"{directory}/{artist["name"]}/%(album)s/%(title)s.%(ext)s"
     }
-    yt_dlp_download(urls, ydl_opts, album_songs)
+    yt_dlp_download([], ydl_opts, album_songs)
 
     ydl_opts = {
         "output": f'{directory}/{artist["name"]}/Singles/%(album)s/%(title)s.%(ext)s',
         # "match_filter": get_singles_filter(exclude)
     }
-    yt_dlp_download(singles_urls, ydl_opts, single_songs)
+    yt_dlp_download([], ydl_opts, single_songs)
 
     # artist_thumbnail = get_thumbnail_url(artist["thumbnails"])
     # download_image_url(artist_thumbnail, f"{directory}/{artist["name"]}/folder.png")
