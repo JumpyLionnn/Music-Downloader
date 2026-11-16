@@ -413,8 +413,23 @@ def get_thumbnail_url(thumbnails):
     return max_url
 
 def download_image_url(url, filename):
-    img = Image.open(requests.get(url, stream=True).raw)
-    img.save(filename)
+    print(f"downloading {url} into {filename}")
+    # response = requests.get(url, stream=True)
+    try:
+        session = requests.Session()
+
+        retries = requests.adapters.Retry(total=5,
+                backoff_factor=0.2,
+                status_forcelist=[ 500, 502, 503, 504 ])
+
+        session.mount('https://', requests.adapters.HTTPAdapter(max_retries=retries))
+
+        response = session.get(url, stream=True)
+        img = Image.open(response.raw)
+        img.save(filename)
+        return True
+    except:
+        return False
 
 def get_yt_dlp_opts(output_template):
     return {
@@ -588,6 +603,7 @@ def download_artist(artist, directory = "./"):
         if os.path.isdir(album_dir):
             thumbnail = get_thumbnail_url(album["thumbnails"])
             download_image_url(thumbnail, f"{album_dir}/cover.png")
+            time.sleep(1)
 
 
 def get_song_album_from_collection(song, albums):
